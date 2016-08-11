@@ -95,7 +95,7 @@ namespace Microsoft.EntityFrameworkCore.Query.ExpressionVisitors.Internal
             {
                 return base.VisitMethodCall(methodCallExpression);
             }
-            
+
             if (_partialEvaluationInfo.IsEvaluatableExpression(methodCallExpression))
             {
                 return TryExtractParameter(methodCallExpression);
@@ -230,8 +230,64 @@ namespace Microsoft.EntityFrameworkCore.Query.ExpressionVisitors.Internal
                 }
 
             }
-                
+
             return newExpression;
+        }
+
+        /// <summary>
+        ///     This API supports the Entity Framework Core infrastructure and is not intended to be used
+        ///     directly from your code. This API may change or be removed in future releases.
+        /// </summary>
+        protected override Expression VisitBinary(BinaryExpression binaryExpression)
+        {
+            if (!binaryExpression.IsLogicalOperation())
+            {
+                return base.VisitBinary(binaryExpression);
+            }
+
+            var newLeftExpression = TryOptimize(binaryExpression.Left) ?? Visit(binaryExpression.Left);
+
+            var leftConstantExpression = newLeftExpression as ConstantExpression;
+            if (leftConstantExpression != null)
+            {
+                var constantValue = (bool)leftConstantExpression.Value;
+                if ((constantValue && binaryExpression.NodeType == ExpressionType.OrElse)
+                    || (!constantValue && binaryExpression.NodeType == ExpressionType.AndAlso))
+                {
+                    return newLeftExpression;
+                }
+            }
+
+            var newRightExpression = TryOptimize(binaryExpression.Right) ?? Visit(binaryExpression.Right);
+
+            var rightConstantExpression = newRightExpression as ConstantExpression;
+            if (rightConstantExpression != null)
+            {
+                var constantValue = (bool)rightConstantExpression.Value;
+                if ((constantValue && binaryExpression.NodeType == ExpressionType.OrElse)
+                    || (!constantValue && binaryExpression.NodeType == ExpressionType.AndAlso))
+                {
+                    return newRightExpression;
+                }
+            }
+
+            return binaryExpression.Update(newLeftExpression, binaryExpression.Conversion, newRightExpression);
+        }
+
+        private Expression TryOptimize(Expression expression)
+        {
+            if (_partialEvaluationInfo.IsEvaluatableExpression(expression)
+                && !_queryableTypeInfo.IsAssignableFrom(expression.Type.GetTypeInfo()))
+            {
+                string _;
+                var value = Evaluate(expression, out _);
+                if (value is bool)
+                {
+                    return Expression.Constant(value, typeof(bool));
+                }
+            }
+
+            return null;
         }
 
         private Expression TryExtractParameter(Expression expression)
